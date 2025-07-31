@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/akapond-katip/poc-traces-metrics-and-logs-golang/api/hello"
+	"github.com/akapond-katip/poc-otel-golang/api/hello"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
