@@ -6,69 +6,41 @@ import (
 	"os"
 
 	"github.com/akapond-katip/poc-traces-metrics-and-logs-golang/api/hello"
-	loggerhandler "github.com/akapond-katip/poc-traces-metrics-and-logs-golang/logger-handler"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/labstack/gommon/log"
 
-	slogecho "github.com/samber/slog-echo"
-)
-
-type RequestID string
-
-const (
-	TraceIDKey             = "trace_id"
-	SpanIDKey              = "span_id"
-	RequestIDKey RequestID = "request_id"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
-	logHandler := loggerhandler.CreateHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     slog.LevelDebug,
-		AddSource: false,
-	}), func(ctx context.Context) []slog.Attr {
-		attrs := []slog.Attr{}
-		if requestID, ok := ctx.Value(RequestIDKey).(string); ok {
-			attrs = append(attrs, slog.String("request_id", requestID))
-		}
-		return attrs
-	})
-	logger := slog.New(logHandler)
-	slog.SetDefault(logger)
-
-	config := slogecho.Config{
-		WithRequestBody:    true,
-		WithResponseBody:   true,
-		WithRequestHeader:  true,
-		WithResponseHeader: true,
-		WithSpanID:         true,
-		WithTraceID:        true,
-		WithUserAgent:      true,
+	ctx := context.Background()
+	shutdown, err := setUpOtelSDK(ctx)
+	if err != nil {
+		slog.Error("failed to set up OpenTelemetry SDK", "error", err)
+		os.Exit(1)
 	}
 
-	slogecho.TraceIDKey = TraceIDKey
-	slogecho.SpanIDKey = SpanIDKey
+	defer func() {
+		if err := shutdown(ctx); err != nil {
+			slog.Error("failed to shut down OpenTelemetry SDK", "error", err)
+			os.Exit(1)
+		}
+	}()
 
 	e := echo.New()
 	e.HideBanner = true
-	e.Logger.SetLevel(log.DEBUG)
+	e.HidePort = true
 
 	// middlewares
-	e.Use(middleware.RequestID())
-	e.Use(slogecho.NewWithConfig(logger, config))
 	e.Use(middleware.Recover())
+	e.Use(otelecho.Middleware(serviceName))
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			requestID := c.Response().Header().Get(echo.HeaderXRequestID)
-			ctx := context.WithValue(c.Request().Context(), RequestIDKey, requestID)
-			request := c.Request().Clone(ctx)
-			c.SetRequest(request)
-
-			logger.InfoContext(c.Request().Context(), "asdf")
-			if err := next(c); err != nil {
-				return err
-			}
-			return nil
+			span := trace.SpanFromContext(c.Request().Context())
+			span.SetAttributes(attribute.String("api.version", "v1"))
+			return next(c)
 		}
 	})
 
