@@ -4,22 +4,27 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	loggrpc "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	metergrpc "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	tracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
+	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	otellog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
 )
 
 const (
-	serviceName    = "github.com/akapond-katip/poc-traces-metrics-and-logs-golang"
+	serviceName    = "github.com/akapond-katip/poc-otel-golang"
 	serviceVersion = "1.0.0"
 	environment    = "development"
 )
@@ -43,14 +48,14 @@ func setUpOtelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	prop := newPropagator()
 	otel.SetTextMapPropagator(prop)
 
-	grpcExp, err := newExporter(ctx)
+	res, err := newResources()
 	if err != nil {
 		handleErr(err)
 		return nil, err
 	}
 
 	// tracer
-	traceProvider, err := newTraceProvider(grpcExp)
+	traceProvider, err := newTraceProvider(ctx, res)
 	if err != nil {
 		handleErr(err)
 		return nil, err
@@ -59,7 +64,7 @@ func setUpOtelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	otel.SetTracerProvider(traceProvider)
 
 	// logger
-	loggerProvider, err := newLoggerProvider()
+	loggerProvider, err := newLoggerProvider(ctx, res)
 	if err != nil {
 		handleErr(err)
 		return nil, err
@@ -67,6 +72,15 @@ func setUpOtelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	shutdownFuncs = append(shutdownFuncs, loggerProvider.Shutdown)
 	global.SetLoggerProvider(loggerProvider)
 	slog.SetDefault(otelslog.NewLogger(serviceName))
+
+	// metrics
+	meterProvider, err := newMetricsProvider(ctx, res)
+	if err != nil {
+		handleErr(err)
+		return nil, err
+	}
+	shutdownFuncs = append(shutdownFuncs, meterProvider.Shutdown)
+	otel.SetMeterProvider(meterProvider)
 	return
 }
 
@@ -77,41 +91,79 @@ func newPropagator() propagation.TextMapPropagator {
 	)
 }
 
-func newLoggerProvider() (*otellog.LoggerProvider, error) {
-	exp, err := stdoutlog.New()
-	if err != nil {
-		return nil, err
-	}
-
-	logProcessor := otellog.NewBatchProcessor(exp)
-	loggerProvider := otellog.NewLoggerProvider(otellog.WithProcessor(logProcessor))
-	return loggerProvider, nil
-}
-
-func newExporter(ctx context.Context) (exp *otlptrace.Exporter, err error) {
-	exp, err = tracegrpc.New(ctx, tracegrpc.WithInsecure())
-	if err != nil {
-		return
+func newLogExporter(ctx context.Context) (exp otellog.Exporter, err error) {
+	if os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == "grpc" {
+		exp, err = loggrpc.New(ctx, loggrpc.WithInsecure())
+	} else {
+		exp, err = stdoutlog.New()
 	}
 
 	return
 }
 
-func newTraceProvider(exporter trace.SpanExporter) (*trace.TracerProvider, error) {
-	rs, err := newResources()
+func newLoggerProvider(ctx context.Context, res *resource.Resource) (*otellog.LoggerProvider, error) {
+	exp, err := newLogExporter(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	logProcessor := otellog.NewBatchProcessor(exp)
+	loggerProvider := otellog.NewLoggerProvider(
+		otellog.WithProcessor(logProcessor),
+		otellog.WithResource(res),
+	)
+	return loggerProvider, nil
+}
+
+func newTraceExporter(ctx context.Context) (exp trace.SpanExporter, err error) {
+	if os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == "grpc" {
+		exp, err = tracegrpc.New(ctx, tracegrpc.WithInsecure())
+	} else {
+		exp, err = stdouttrace.New()
+	}
+
+	return
+}
+
+func newTraceProvider(ctx context.Context, res *resource.Resource) (*trace.TracerProvider, error) {
+	exp, err := newTraceExporter(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	traceProvider := trace.NewTracerProvider(
-		trace.WithBatcher(exporter),
-		trace.WithResource(rs),
+		trace.WithBatcher(exp),
+		trace.WithResource(res),
 		trace.WithSampler(
 			trace.ParentBased(trace.TraceIDRatioBased(1)),
 		),
 	)
 
 	return traceProvider, nil
+}
+
+func newMeterExporter(ctx context.Context) (exp metric.Exporter, err error) {
+	if os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == "grpc" {
+		exp, err = metergrpc.New(ctx, metergrpc.WithInsecure())
+	} else {
+		exp, err = stdoutmetric.New()
+	}
+
+	return
+}
+
+func newMetricsProvider(ctx context.Context, res *resource.Resource) (*metric.MeterProvider, error) {
+	exp, err := newMeterExporter(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(metric.NewPeriodicReader(exp)),
+	)
+
+	return meterProvider, nil
 }
 
 func newResources() (res *resource.Resource, err error) {

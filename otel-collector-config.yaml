@@ -16,6 +16,21 @@ exporters:
     endpoint: jaeger:4317
     tls:
       insecure: true
+
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  otlphttp/logs:
+    endpoint: "http://loki:3100/otlp"
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: default
+
   
   debug:
 
@@ -24,12 +39,12 @@ service:
     traces/dev:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/jaeger, debug]
-    # metrics:
-    #   receivers: [otlp]
-    #   processors: [batch]
-    #   exporters: [otlp]
-    # logs:
-    #   receivers: [otlp]
-    #   processors: [batch]
-    #   exporters: [otlp]
+      exporters: [otlp/jaeger, otlp/tempo, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/logs, debug]

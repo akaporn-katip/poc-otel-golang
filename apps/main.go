@@ -35,6 +35,7 @@ func main() {
 
 	// middlewares
 	e.Use(middleware.Recover())
+	e.Use(MeterMiddleware)
 	e.Use(otelecho.Middleware(serviceName))
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -45,7 +46,8 @@ func main() {
 	})
 
 	// routes
-	e.GET("/hello", hello.HelloApiHandler)
+	e.GET("/hello", hello.HelloApiHandler).Name = "hello.HelloApiHandler"
+	e.GET("/hi", hello.HelloApiHandler).Name = "hello.HiApiHandler"
 
 	e.Logger.Fatal(e.Start(":3333"))
 }
