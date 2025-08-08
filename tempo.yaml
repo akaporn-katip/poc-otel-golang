@@ -40,6 +40,15 @@ metrics_generator:
   traces_storage:
     path: /var/tempo/generator/traces
 
+  processor:
+    span_metrics:
+      histogram_buckets: [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
+      dimensions:
+        - http.method
+        - http.status_code
+        - http.route
+        - service.name
+
 storage:
   trace:
     backend: local # backend configuration to use

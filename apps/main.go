@@ -40,7 +40,11 @@ func main() {
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			span := trace.SpanFromContext(c.Request().Context())
-			span.SetAttributes(attribute.String("api.version", "v1"))
+			span.SetAttributes(
+				attribute.String("http.method", c.Request().Method),
+				attribute.String("http.route", c.Path()),
+				attribute.String("api.version", "v1"),
+			)
 			return next(c)
 		}
 	})
